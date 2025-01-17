@@ -1,0 +1,303 @@
+---
+title: "Police Manuscript Code"
+author: "Allison Boretsky"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#loading datasets
+```{r, include=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(ggformula)
+library(dplyr)
+library(gtsummary)
+library(readxl)
+library(readr)
+
+
+main<-read_excel("Chicago Health Atlas Data excel.xlsx", sheet="all vars") #df with all variables
+IDdf<-read_excel("Chicago Health Atlas Data excel.xlsx", sheet = "infectious") #df with infectious disease specific variables
+covars<-read_excel("Chicago Health Atlas Data excel.xlsx", sheet = "combinedID+covars") #df with potential covariates
+mental<-read_excel("mental health indicators.xlsx")
+colnames(mental)[3]<-"CA"
+arrests2020<-read.csv("arrests2020.csv")
+arrests2021<-read.csv("arrests2021.csv")
+t2020<-table(arrests2020$Community.Area)%>% #tallying freq of arrests 2020 per CA 
+  as.data.frame()%>%
+  rename("arrests20"= "Freq", "CA"="Var1")
+t2021<-table(arrests2021$Community.Area)%>% #tallying freq of arrests 2021 per CA 
+  as.data.frame()%>%
+  rename("arrests21"= "Freq", "CA"="Var1")
+arreststotal<-merge(x=t2020,
+                    y=t2021,
+                    by="CA",
+                    all=TRUE)
+colnames(IDdf)[3]<-"CA"
+data<-merge(x=IDdf,
+          y=arreststotal,
+          by="CA",
+          all=TRUE)
+data <- data %>% mutate_if(is.character, as.numeric)
+ID_covars<-merge(x=covars,
+                 y=arreststotal,
+                 by="CA",
+                 all=FALSE)
+ID_covars <- ID_covars %>% mutate_if(is.character, as.numeric)
+```
+
+#arrest rates
+```{r}
+# Per CA
+data<-mutate(data,"rate20"=(arrests20/Population)*100000)
+data<-mutate(data,"rate21"=(arrests21/Population)*100000)
+ID_covars<-mutate(ID_covars,"rate20"=(arrests20/Population)*100000)
+ID_covars<-mutate(ID_covars,"rate21"=(arrests21/Population)*100000)
+```
+
+#correlation and linear models
+```{r}
+#normality tests
+shapiro.test(log(ID_covars$rate20)) #normal with log
+hist(log(data$rate20))
+shapiro.test((data$CDCOVCR_2021)) 
+shapiro.test(log(data$CDTBR_2022+1)) #normal-ish
+shapiro.test(log(data$CHADXHPR_2021)) #normal with log
+shapiro.test(data$`VRFLUR_2018-2022`) #normal
+shapiro.test(data$`CDCOVDR_2018-2022`) #normal
+shapiro.test((data$CHAPYEB_2022)) #normal-ish
+shapiro.test(data$`HCSTLEP_2021-2022`) #normal
+#correlations
+test3<-cor.test(x=log(data$CHADXHPR_2021), #Covid hospitalization rate
+                 y=log(data$rate20),
+                 method="pearson")
+print(test3)
+
+#corr matrix
+library(Hmisc)
+datamatrix<-ID_covars%>% 
+  select(-'Name')
+datamatrix[is.na(datamatrix)] <- 0
+cor_data=cor((datamatrix), use="pairwise.complete.obs")
+
+library(corrtable)
+ID_covars<-ID_covars%>%
+  mutate(ID_covars, logCHR=log(ID_covars$CHADXHPR_2021))
+correlation_matrix(datamatrix, digits = 2)
+save_correlation_matrix(df=datamatrix,
+                        filename='covariate-correlation-matrix.csv',
+                        digits=3
+                        )
+install.packages('writexl')
+library(writexl)
+```
+
+#adjusting for normality
+```{r}
+#covid cases
+copy<-data.frame(data) #copying original dataframe 
+tracemem(copy)==tracemem(data) #making sure dataframes are separate 
+hist(log(data$CDCOVCR_2021)) #very skewed (right)
+hist((data$CDCOVCR_2021))
+shapiro.test((data$CDCOVCR_2021)) 
+  #make log of covid case rate variable
+copy<-mutate(copy, logCR=log(copy$CDCOVCR_2021))
+# 95%
+
+lower_bound <- quantile(copy$logCR, 0.025, na.rm = TRUE)
+lower_bound
+
+upper_bound <- quantile(copy$logCR, 0.975, na.rm = TRUE)
+upper_bound
+
+outlier_ind95 <- which(copy$logCR < lower_bound | copy$logCR > upper_bound)
+outlier_ind95
+
+df_13_95 <- copy[-outlier_ind95,]
+hist(df_13_95$logCR)
+shapiro.test((df_13_95$logCR))
+ID_covars<-mutate(ID_covars, logAR20=log(ID_covars$rate20))
+
+#Black
+copy<-data.frame(demdf) #copying original dataframe 
+tracemem(copy)==tracemem(demdf) #making sure dataframes are separate 
+hist(log(demdf$white)) #very skewed (left)
+hist((demdf$white))
+shapiro.test((demdf$white)) 
+  #make log of covid case rate variable
+copy<-mutate(copy, logw=log(demdf$white))
+# 95%
+
+lower_bound <- quantile(copy$logw, 0.025, na.rm = TRUE)
+lower_bound
+
+upper_bound <- quantile(copy$logw, 0.975, na.rm = TRUE)
+upper_bound
+
+outlier_ind95 <- which(copy$logw < lower_bound | copy$logw > upper_bound)
+outlier_ind95
+
+df_13_95 <- copy[-outlier_ind95,]
+hist(df_13_95$logw)
+shapiro.test((df_13_95$logw))
+
+```
+
+#linear models for covariates
+```{r}
+shapiro.test(log(ID_covars$`POV_2018-2022...14`)) #normal with log
+shapiro.test(log(ID_covars$`HCSHYTP_2021-2022`)) #normal with log
+shapiro.test((ID_covars$`HCSOBP_2021-2022`)) #normal
+shapiro.test((ID_covars$LNG_2021)) #normal
+shapiro.test(log(ID_covars$`DIS_2018-2022`)) #normal with log
+
+m1<-lm(logCHR~logAR20+log(`POV_2018-2022...14`), data=ID_covars) #poverty
+summary(m1)
+m2<-lm(logCHR~logAR20+log(`HCSHYTP_2021-2022`), data=ID_covars) #hypertension
+summary(m2)
+m3<-lm(logCHR~logAR20+`HCSOBP_2021-2022`, data=ID_covars) #obesity
+summary(m3)
+m4<-lm(logCHR~logAR20+`LNG_2021`, data=ID_covars) #COPD
+summary(m4)
+m5<-lm(logCHR~logAR20+log(`DIS_2018-2022`), data=ID_covars) #disability
+summary(m5)
+```
+
+#loading demographic variables
+```{r}
+demdf<-read_excel("Chicago Health Atlas Data Download - demographics.xlsx", sheet="data")
+demdf<-merge(x=demdf,
+             y=ID_covars,
+             by="CA",
+             all=FALSE)
+demdf<-mutate(demdf,NH=(100-hispanic))
+demdf<-mutate(demdf,logAR20=log(rate20))
+demdf<-mutate(demdf,rate=((rate20+rate21)/2))
+demdf<-merge(x=demdf,
+             y=mental,
+             by="CA",
+             all=TRUE)
+#corr matrix
+library(Hmisc)
+datamatrix1<-demdf%>% 
+  select(-'Name',-'Name.y',-'Name.x', -'Layer.x', -'Layer.y')
+datamatrix1[is.na(datamatrix1)] <- 0
+datamatrix1<-as.numeric(as.character(datamatrix1(c[trustlawrate, safetyrate, psychdistress, violencerate]))
+cor_data=cor((datamatrix1), use="pairwise.complete.obs")
+library(corrtable)
+correlation_matrix(datamatrix1, digits = 2)
+save_correlation_matrix(df=datamatrix1,
+                        filename='covariate-correlation-matrix3.csv',
+                        digits=3
+                        )
+datamatrix[] <- lapply(datamatrix, function(x) {
+    if(is.factor(x)) as.numeric(as.character(x)) else x
+})
+sapply(datamatrix1, class)
+datamatrix1<-as.numeric(as.character(datamatrix(c[trustlawrate, safetyrate, psychdistress, violencerate]))
+```
+
+#Categorization of proportion Black population and arrest areas based off median 
+```{r}
+median(demdf$black) #13.9285
+median(demdf$rate20) #816.3683
+
+dataframe<-demdf %>% 
+ mutate(black.cat = case_when(
+ black>= 13.9285~"high",
+ black<13.9285~"low"),
+ arrest.cat=case_when(
+   rate20>=816.3683~"high",
+   rate20<816.3683~"low"
+ ))
+
+median(dataframe$logCHR)
+write.csv(dataframe, "maindf.csv")
+
+dataframe2<-dataframe%>%
+  mutate(arrest.cat = cut(rate20, 
+                         breaks=c(-Inf, quantile(rate20)[2], quantile(rate20)[4], Inf), 
+                         labels=c("low", "med", "high")))
+#HIGH 
+high<-dataframe%>%
+  filter(black.cat=="high")
+modela<-lm(logCHR~rate20+(seniors)+male+(`POV_2018-2022...14`)+(`HCSHYTP_2021-2022`)+`HCSOBP_2021-2022`+LNG_2021+(`DIS_2018-2022`), data=high) #all
+summary(modela)
+modela%>% 
+  tbl_regression()
+#LOW 
+low<-dataframe%>%
+  filter(black.cat=="low")
+modelb<-lm(logCHR~rate20+(seniors)+male+(`POV_2018-2022...14`)+(`HCSHYTP_2021-2022`)+`HCSOBP_2021-2022`+LNG_2021+(`DIS_2018-2022`), data=low) #all
+summary(modelb)
+modelb%>% 
+  tbl_regression()
+```
+
+#TABLES FOR PAPER
+
+##setting reference groups as "low" 
+```{r}
+dataframe$arrest.cat<-as.factor(dataframe$arrest.cat)
+dataframe$arrest.cat<-relevel(dataframe$arrest.cat, ref = "low")
+dataframe$black.cat<-as.factor(dataframe$black.cat)
+dataframe$black.cat<-relevel(dataframe$black.cat, ref = "low")
+```
+
+##Model 1
+```{r}
+lm1<-lm(logCHR~arrest.cat, data=dataframe)
+summary(lm1)
+exp(coefficients(lm1))
+exp(confint(lm1))
+lm1%>%
+  tbl_regression(label=list(arrest.cat~"Arrest Category"))
+```
+
+##Model 2
+```{r}
+#renaming poverty variable
+dataframe<-dataframe%>%rename(poverty=`POV_2018-2022...14`)
+
+finalmodel<-lm(logCHR~arrest.cat+(seniors)+male+poverty+(`HCSHYTP_2021-2022`)+`HCSOBP_2021-2022`+LNG_2021+(`DIS_2018-2022`), data=dataframe)
+summary(finalmodel)
+finalmodel%>%
+  tbl_regression(label=list(arrest.cat~"Arrest Category", seniors~"Age(65+)",male~"Male",poverty~"Poverty",`HCSHYTP_2021-2022`~"Hypertension",`HCSOBP_2021-2022`~"Obesity",`LNG_2021`~"COPD",`DIS_2018-2022`~"Disability"))
+exp(coefficients(finalmodel))
+exp(confint(finalmodel))
+```
+
+##Model 3
+```{r}
+interactionmodel5<-lm(logCHR~arrest.cat*black.cat+(seniors)+male+(poverty)+(`HCSHYTP_2021-2022`)+`HCSOBP_2021-2022`+LNG_2021+(`DIS_2018-2022`), data=dataframe)
+summary(interactionmodel5)
+interactionmodel5%>%
+  tbl_regression(label=list(arrest.cat~"Arrest Category", black.cat~"Black Category",seniors~"Age(65+)",male~"Male",poverty~"Poverty",`HCSHYTP_2021-2022`~"Hypertension",`HCSOBP_2021-2022`~"Obesity",`LNG_2021`~"COPD",`DIS_2018-2022`~"Disability" ))
+exp(coefficients(interactionmodel5))
+exp(confint(interactionmodel5))
+```
+
+##Model 4
+```{r}
+lm2<-lm(logCHR~arrest.cat+black.cat, data=dataframe)
+summary(lm2)
+lm2%>%
+  tbl_regression(label=list(arrest.cat~"Arrest Category", black.cat~"Black Category"))
+exp(coefficients(lm2))
+exp(confint(lm2))
+```
+
+##Model 5
+```{r}
+dataframe<-dataframe%>%rename(poverty=`POV_2018-2022...14`)
+lm3<-lm(logCHR~arrest.cat+black.cat+(seniors)+male+(poverty)+(`HCSHYTP_2021-2022`)+`HCSOBP_2021-2022`+LNG_2021+(`DIS_2018-2022`), data=dataframe)
+summary(lm3)
+lm3%>%
+  tbl_regression(label=list(arrest.cat~"Arrest Category", black.cat~"Black Category",seniors~"Age(65+)",male~"Male",poverty~"Poverty",`HCSHYTP_2021-2022`~"Hypertension",`HCSOBP_2021-2022`~"Obesity",`LNG_2021`~"COPD",`DIS_2018-2022`~"Disability" ))
+exp(coefficients(lm3))
+exp(confint(lm3))
+```
